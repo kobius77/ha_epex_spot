@@ -406,7 +406,7 @@ class EpexSpotMedianPriceSensorEntity(EpexSpotEntity, SensorEntity):
             self._localized.attr_name_per_kwh: self.native_value,
         }
     
-    class EpexSpotNoonToNoonRankSensorEntity(EpexSpotEntity, SensorEntity):
+class EpexSpotNoonToNoonRankSensorEntity(EpexSpotEntity, SensorEntity):
     """Rank based on a Noon-to-Noon (12:00-12:00) window."""
 
     entity_description = SensorEntityDescription(
