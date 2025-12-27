@@ -1,3 +1,4 @@
+from datetime import timedelta
 import logging
 from statistics import median
 
@@ -42,6 +43,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         EpexSpotHighestPriceSensorEntity(coordinator),
         EpexSpotAveragePriceSensorEntity(coordinator),
         EpexSpotMedianPriceSensorEntity(coordinator),
+        EpexSpotNoonToNoonRankSensorEntity(coordinator),
     ]
 
     async_add_entities(entities)
@@ -403,3 +405,89 @@ class EpexSpotMedianPriceSensorEntity(EpexSpotEntity, SensorEntity):
         return {
             self._localized.attr_name_per_kwh: self.native_value,
         }
+    
+    class EpexSpotNoonToNoonRankSensorEntity(EpexSpotEntity, SensorEntity):
+    """Rank based on a Noon-to-Noon (12:00-12:00) window."""
+
+    entity_description = SensorEntityDescription(
+        key="NoonToNoonRank",
+        name="Rank (Noon-to-Noon)",
+        native_unit_of_measurement="",
+        suggested_display_precision=0,
+        state_class=SensorStateClass.MEASUREMENT,
+    )
+
+    def __init__(self, coordinator: DataUpdateCoordinator):
+        super().__init__(coordinator, self.entity_description)
+
+    def _get_current_window_data(self):
+        """Filter market data for the current 12:00-12:00 window."""
+        now = dt_util.now()
+        
+        # 1. Determine the start of the current Noon-Window
+        # If it's past 12:00, the window started today at 12:00.
+        # If it's before 12:00, the window started yesterday at 12:00.
+        if now.hour >= 12:
+            start_time = now.replace(hour=12, minute=0, second=0, microsecond=0)
+        else:
+            start_time = (now - timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
+            
+        end_time = start_time + timedelta(hours=24)
+        
+        # 2. Filter the raw data from the source (which contains all available hours)
+        # We select only the hours that fall within [Start, End)
+        data_window = [
+            e for e in self._source.marketdata 
+            if start_time <= dt_util.as_local(e.start_time) < end_time
+        ]
+        
+        return data_window
+
+    @property
+    def native_value(self) -> StateType:
+        """Calculate the rank of the current price within the Noon-Window."""
+        window_data = self._get_current_window_data()
+        
+        if not window_data:
+            return None
+            
+        # Sort the prices in the current window to determine ranking
+        prices = [e.market_price_per_kwh for e in window_data]
+        sorted_prices = sorted(prices)
+        
+        # Get the current price
+        current_price = self._source.marketdata_now.market_price_per_kwh
+        
+        # Find where the current price sits in the sorted list
+        try:
+            return sorted_prices.index(current_price)
+        except ValueError:
+            # Edge case: current time might slightly drift out of window during updates
+            return None
+
+    @property
+    def extra_state_attributes(self):
+        """Generate the data attribute for the graph."""
+        window_data = self._get_current_window_data()
+        
+        if not window_data:
+            return {}
+            
+        # create a sorted list of prices to look up ranks
+        prices = [e.market_price_per_kwh for e in window_data]
+        sorted_prices = sorted(prices)
+        
+        # Generate the list of objects for the graph
+        data = []
+        for e in window_data:
+            price = e.market_price_per_kwh
+            # Find rank for this specific hour's price
+            rank = sorted_prices.index(price)
+            
+            data.append({
+                ATTR_START_TIME: dt_util.as_local(e.start_time).isoformat(),
+                ATTR_END_TIME: dt_util.as_local(e.end_time).isoformat(),
+                ATTR_RANK: rank,
+            })
+            
+        return {ATTR_DATA: data}
